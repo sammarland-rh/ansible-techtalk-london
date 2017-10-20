@@ -1,0 +1,100 @@
+---
+- hosts: atlantis 
+  vars_files:
+      - vars/app-stack.yml 
+  tasks:
+      - name: start libvirtd
+        service: name=libvirtd state=started enabled=yes
+        register: libvirtd
+
+      - name: wait for libvirtd to get up
+        pause: seconds=30
+        when: libvirtd.changed
+
+      - name: get list of vms
+        virt: command=list_vms
+        register: virt_vms
+ 
+      - name: create vm
+        command: "virt-install --name {{item.name}}
+                 --connect qemu:///system
+                 --arch x86_64
+                 --ram {{ item.mem }}
+                 --vcpus {{ item.cpu }}
+                 --cpu host
+                 --location {{ item.url }}
+                 --os-type {{ item.os.type }}
+                 --os-variant {{ item.os.variant }}
+                 --network {{item.network}}
+                 --graphics vnc
+                 --{{item.virt_hypervisor}}
+                 --virt-type {{ item.virt_type }}
+                 --disk size={{item.disks.os.size}},{{item.disks.os.options}}
+                 --extra-args '{{item.extra_args}}'
+                 --noautoconsole
+                 --autostart"
+        when: item.name not in virt_vms.list_vms
+        with_items: "{{guests}}"
+
+      - name: Wait 20 secs for all VMs to get IP
+        pause:
+          seconds: 20
+        with_items: guests
+        
+      - name: Clean up etc hosts
+        lineinfile:
+          path: /etc/hosts
+          state: absent
+          regexp: "{{item.name}}"
+        with_items: "{{guests}}"
+
+      - name: Initialize etc hosts
+        lineinfile:
+          path: /etc/hosts
+          state: present
+          line: "{{item}}"
+        with_items:
+        - 127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4
+        - ::1 localhost localhost.localdomain localhost6 localhost6.localdomain6
+
+      - name: Rewrite etc hosts
+        shell: ip n | grep "`virsh dumpxml {{item.name}} | grep "mac address" | sed "s/.*'\(.*\)'.*/\1/g"`" | awk '{ gsub(/[\(\)]/,"",$1); print $1" {{item.name}}" }'
+        register: vm_host_entry
+        with_items: "{{guests}}"
+
+      - lineinfile:
+          path: /etc/hosts
+          line: "{{item.stdout}}"
+        with_items: "{{vm_host_entry.results}}"
+
+      - name: Remove old inventory
+        file:
+          path: /root/inventory
+          state: absent
+
+      - name: Create groups to inventory
+        shell: echo '[tower]' >> /root/inventory
+
+      - name: Create simple ansible inventory
+        shell: echo {{item.name}} >> /root/inventory
+        with_items: "{{guests}}"
+        when: item.name != 'ansible-tower'
+
+      - name: get guest info
+        virt: command=info
+        register: virt_info
+      
+      - name: make sure all vms are running
+        virt: name={{item.name}} command=start
+        when: virt_info[item.name]['state'] != 'running'
+        with_items: "{{ guests }}"  
+
+      #Setup IPTables rule to allow the VMs to make connections to the internet 
+      - name: setup iptables
+        iptables:
+          action: insert
+          chain: FORWARD
+          jump: ACCEPT
+          source: 192.168.122.0/24
+          in_interface: virbr0
+          

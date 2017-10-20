@@ -1,0 +1,32 @@
+---
+- name: Register to RHN and subscribe
+  hosts: app-stack 
+  gather_facts: False
+  serial: 1
+  vars_files:
+      - vars/rhn_creds.yml
+  tasks:
+  - name: RH Subscribe and auto-subscribe to available content.
+    redhat_subscription:
+      state: present
+      username: "{{rhn_username}}"
+      password: "{{rhn_password}}"
+      autosubscribe: true
+
+- name: Manager repos
+  hosts: app-stack
+  gather_facts: False
+  tasks:
+  - name: Disable all repos
+    command: subscription-manager repos --disable='*'
+    ignore_errors: true
+  - name: Activate some repos
+    command: "subscription-manager repos --enable=rhel-7-server-rpms --enable=rhel-7-server-extras-rpms --enable=rhel-7-fast-datapath-rpms --enable=rhel-7-server-optional-rpms"
+
+
+- name: Install some sensible default packages
+  gather_facts: False
+  hosts: app-stack
+  roles:
+  - { role: yumstuff, packages: [wget,bash-completion]}
+

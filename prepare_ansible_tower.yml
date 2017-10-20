@@ -1,0 +1,143 @@
+---
+- name: Prepare host for ansible tower install
+  hosts: tower
+  vars_files:
+    - vars/tower_credentials.yml
+  tasks:
+  - name: Create dir to unarchive Tower install
+    file:
+      path: /root/ansible-tower-latest
+      state: directory
+      mode: 0755
+  - name: Get the latest RHEL offline installer for Ansible Tower 
+    unarchive:
+     src: http://releases.ansible.com/ansible-tower/setup/ansible-tower-setup-latest.tar.gz
+     dest: /root/ansible-tower-latest
+     remote_src: yes
+
+  - name: Install some packages
+    yum:
+      name: "{{item}}"
+      state: present
+    with_items:
+      - ansible
+      - http://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+      - vim
+
+  - name: Insert config into ansible tower install inventory
+    lineinfile:
+      path: /root/ansible-tower-latest/ansible-tower-setup-3.2.1/inventory
+      regexp: "{{item.value.regexp}}"
+      line: "{{item.value.password}}"
+    with_dict: 
+        admin:
+          password: "admin_password='{{tower_admin_password}}'"
+          regexp: 'admin_password'
+        pg:   
+          password: "pg_password='{{pg_admin_password}}'"
+          regexp: 'pg_password'
+        rabbit:
+          password: "rabbitmq_password='{{rabbitmq_admin_password}}'"
+          regexp: 'rabbitmq_password' 
+  - name: Run Ansible Tower Installer
+    shell: sh /root/ansible-tower-latest/ansible-tower-setup-3.2.1/setup.sh
+    args:
+      creates: /etc/tower
+  
+  #- name: Setup ip tables rules for forwarding traffic to Ansible Tower
+#  - name: setup iptables
+#    local_action: 
+#      module: iptables
+#      action: insert
+#      chain: FORWARD
+#      out_interface: virbr0
+#      jump: ACCEPT 
+#      protocol: tcp
+#      match: tcp
+#      destination: 192.168.122.215/32
+#      destination_port: 443 
+#      ctstate: NEW
+#      comment: Redirect web traffic on port 443 to Ansible Tower Machine
+#
+#
+#
+  - name: IPTables rule for guest subnet
+    local_action:
+      module: iptables
+      action: insert
+      chain: FORWARD
+      destination: 192.168.122.0/24
+      ctstate: NEW,RELATED,ESTABLISHED
+      jump: ACCEPT
+
+  - name: setup iptables
+    local_action:
+      module: iptables
+      table: nat
+      action: insert
+      chain: PREROUTING
+      protocol: tcp
+      destination: 144.76.202.113
+      destination_port: 9443
+      jump: DNAT
+      to_destination: 192.168.122.196:443
+
+  - name: setup iptables
+    local_action:
+      module: iptables
+      table: nat
+      chain: POSTROUTING
+      destination_port: 9443
+      destination: 192.168.122.196/32
+      protocol: tcp
+      jump: MASQUERADE
+
+  - name: Download Certbot
+    local_action:
+      module: get_url
+      url: https://dl.eff.org/certbot-auto
+      dest: /root/
+
+  - name: Change permsission
+    local_action:
+      module: file
+      path: /root/certbot-auto
+      owner: root
+      group: root
+      mode: 0755
+
+  - name: Chcek if we've generated a cert already
+    local_action: stat path=/etc/letsencrypt/live/tower.marland.io/fullchain.pem
+    register: cert_stats
+
+  - name: generate certs (first time)
+    local_action: shell /root/certbot-auto certonly --standalone -d tower.marland.io --email sam@marland.io --non-interactive --agree-tos
+    when: cert_stats.stat.exists == False
+
+  - name: generate certs (subsequent time)
+    local_action: shell /root/certbot-auto renew --dry-run
+    when: cert_stats.stat.exists == True
+
+  - name: Backup Nginx.conf before we mess with it
+    shell: cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak
+
+  - name: Copy certs
+    copy:
+      src: /etc/letsencrypt/live/tower.marland.io/
+      dest: /etc/letsencrypt/live/tower.marland.io/
+      owner: root
+      group: root
+      mode: 600
+
+  - name: Change path to SSL certs in nginx.conf
+    template:
+      src: template/nginx.conf.j2
+      dest: /etc/nginx/nginx.conf
+    vars:
+      - ssl_fullchain_path: /etc/letsencrypt/live/tower.marland.io/fullchain.pem
+      - ssl_key_path: /etc/letsencrypt/live/tower.marland.io/privkey.pem
+
+  - name:
+    systemd:
+      name: nginx
+      state: reloaded

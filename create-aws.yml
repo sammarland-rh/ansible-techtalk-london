@@ -1,0 +1,21 @@
+---
+- hosts: localhost
+  
+  vars_files:
+      - vars/aws_creds.yml
+  tasks:
+      - name: Create Machines
+        ec2:
+          access_key: "{{ access_key }}"
+          secret_key: "{{ secret_key }}"
+          group: sshandhttp
+          key_name: atlantis-key
+          instance_type: t2.medium
+          image: ami-db9887bd
+          region: eu-west-1 
+          wait: true 
+          count: "{{number_of_machines}}" 
+          instance_tags:
+             Name: ansible_techtalk_reverse_proxy
+        register: ec2 
+

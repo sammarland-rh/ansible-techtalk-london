@@ -1,0 +1,126 @@
+---
+- name: Setup reverse proxy
+  hosts: reverse-proxy 
+  tasks:
+  - name: Install some packages
+    yum:
+      name: http://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm 
+      state: present
+  
+  - name: Set SE Linux to permissive
+    selinux:
+      state: permissive
+      policy: targeted
+      
+  - name: Install some packages
+    yum:
+      name: nginx
+      state: latest
+ 
+  - name: Install some packages
+    yum:
+      name: vim
+      state: latest
+
+  - name: IPTables rule for guest subnet
+    iptables:
+      action: insert
+      chain: FORWARD
+      destination: 192.168.122.0/24
+      ctstate: NEW,RELATED,ESTABLISHED
+      jump: ACCEPT
+    delegate_to: atlantis
+
+  - name: setup iptables
+    iptables:
+      table: nat
+      action: insert
+      chain: PREROUTING
+      protocol: tcp
+      destination: 144.76.202.113
+      destination_port: 6443
+      jump: DNAT
+      to_destination: "{{proxy_ip_address}}:6443"
+    delegate_to: atlantis
+
+  - name: setup iptables
+    iptables:
+      table: nat
+      chain: POSTROUTING
+      destination_port: 6443
+      destination: "{{proxy_ip_address}}/32"
+      protocol: tcp
+      jump: MASQUERADE
+    delegate_to: atlantis
+
+  - name: Download Certbot
+    get_url:
+      url: https://dl.eff.org/certbot-auto
+      dest: /root/
+    delegate_to: atlantis
+
+  - name: Change permsission
+    file:
+      path: /root/certbot-auto
+      owner: root
+      group: root
+      mode: 0755
+    delegate_to: atlantis
+
+  - name: Chcek if we've generated a cert already
+    stat: path=/etc/letsencrypt/live/ticketmonster.apps.marland.io/fullchain.pem
+    register: cert_stats
+    delegate_to: atlantis
+
+  - name: generate certs (first time)
+    shell: /root/certbot-auto certonly --standalone -d ticketmonster.apps.marland.io --email sam@marland.io --non-interactive --agree-tos
+    when: cert_stats.stat.exists == False
+    delegate_to: atlantis
+
+  - name: generate certs (subsequent time)
+    shell: /root/certbot-auto renew --dry-run
+    when: cert_stats.stat.exists == True
+    delegate_to: atlantis
+
+  - name: Backup Nginx.conf before we mess with it
+    shell: cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak
+
+  - name: Creates directory
+    file:
+      path: /etc/letsencrypt/live/ticketmonster.apps.marland.io/
+      state: directory
+      owner: root 
+      group: root
+      mode: 0700
+
+  - name: Copy certs
+    synchronize:
+      src: /etc/letsencrypt/live/ticketmonster.apps.marland.io/ 
+      dest: /etc/letsencrypt/live/ticketmonster.apps.marland.io/
+      mode: push
+      copy_links: yes
+    delegate_to: atlantis
+
+  - name: Change path to SSL certs in nginx.conf
+    template:
+      src: template/nginx.conf.j2
+      dest: /etc/nginx/nginx.conf
+    vars:
+      - ssl_fullchain_path: /etc/letsencrypt/live/ticketmonster.apps.marland.io/fullchain.pem
+      - ssl_key_path: /etc/letsencrypt/live/ticketmonster.apps.marland.io/privkey.pem
+
+  - name: Copy nginx configuration for reverse proxy
+    template: src=template/default-reverese.conf.j2 dest=/etc/nginx/nginx.conf
+
+  - name: Start Nginx
+    service: name=nginx state=started enabled=yes
+
+  - name:
+    systemd:
+      name: nginx
+      state: reloaded
+
+- hosts: webserver
+  roles:
+    - jboss-standalone
+    - java-app

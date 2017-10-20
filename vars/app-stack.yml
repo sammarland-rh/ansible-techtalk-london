@@ -1,0 +1,31 @@
+guests:
+    - name: webserver 
+      url: http://hetzner-static.s3-website-eu-west-1.amazonaws.com/rhel73
+      cpu: 4
+      mem: 8096
+      virt_type: kvm
+      virt_hypervisor: hvm
+      network: bridge=virbr0
+      os:
+        type: linux
+        variant: rhel7.3
+      disks:
+        os:
+          size: 100 
+          options: format=qcow2,cache=none,io=native
+      extra_args: ip=dhcp inst.ks=http://s3-eu-west-1.amazonaws.com/sam-ks/ks/rhel-73.ks console=tty0 console=ttyS0,115200 quiet systemd.show_status=yes
+    - name: reverse-proxy
+      url: http://hetzner-static.s3-website-eu-west-1.amazonaws.com/rhel73
+      cpu: 4
+      mem: 8096
+      virt_type: kvm
+      virt_hypervisor: hvm
+      network: bridge=virbr0
+      os:
+        type: linux
+        variant: rhel7.3
+      disks:
+        os:
+          size: 100
+          options: format=qcow2,cache=none,io=native
+      extra_args: ip=dhcp inst.ks=http://s3-eu-west-1.amazonaws.com/sam-ks/ks/rhel-73.ks console=tty0 console=ttyS0,115200 quiet systemd.show_status=yes
